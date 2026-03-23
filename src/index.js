@@ -9,6 +9,7 @@ const authRoutes = require('./routes/auth');
 const checkinRoutes = require('./routes/checkin');
 const leaderboardRoutes = require('./routes/leaderboard');
 const historyRoutes = require('./routes/history');
+const premiumRoutes = require('./routes/premium');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -58,6 +59,7 @@ app.use('/user', authRoutes);
 app.use('/checkin', checkinRoutes);
 app.use('/leaderboard', leaderboardRoutes);
 app.use('/user', historyRoutes);
+app.use('/premium', premiumRoutes);
 
 // 404 handler
 app.use((req, res) => {
