@@ -1,6 +1,6 @@
 const express = require('express');
 const Stripe = require('stripe');
-const { authenticateToken } = require('../middleware/auth');
+const { requireAuth: authenticateToken } = require('../middleware/auth');
 const { supabase } = require('../lib/supabase');
 
 const router = express.Router();
