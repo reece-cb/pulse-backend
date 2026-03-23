@@ -11,7 +11,7 @@ const PRICE_ID = 'price_1TDxia8nElC3RzesqHxUVSBf';
 // Create payment intent for premium subscription
 router.post('/subscribe', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.userId;
 
     // Get or create Stripe customer
     const { data: user } = await supabase
@@ -50,7 +50,7 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
 router.post('/confirm', authenticateToken, async (req, res) => {
   try {
     const { subscriptionId } = req.body;
-    const userId = req.user.userId;
+    const userId = req.userId;
 
     const subscription = await stripe.subscriptions.retrieve(subscriptionId);
 
@@ -76,7 +76,7 @@ router.get('/status', authenticateToken, async (req, res) => {
     const { data: user } = await supabase
       .from('users')
       .select('is_premium, premium_expires_at')
-      .eq('id', req.user.userId)
+      .eq('id', req.userId)
       .single();
 
     const isPremium = user?.is_premium && new Date(user.premium_expires_at) > new Date();
