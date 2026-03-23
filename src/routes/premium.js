@@ -8,83 +8,87 @@ const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PRICE_ID = 'price_1TDxia8nElC3RzesqHxUVSBf';
 
-// Create payment intent for premium subscription
+// Step 1: Create a SetupIntent to collect payment method first
 router.post('/subscribe', authenticateToken, async (req, res) => {
   try {
     const userId = req.userId;
 
-    // Get or create Stripe customer
+    // Get user email
     const { data: user } = await supabase
       .from('users')
       .select('email, stripe_customer_id')
       .eq('id', userId)
       .single();
 
-    let customerId = user?.stripe_customer_id;
+    if (!user) return res.status(404).json({ error: 'User not found', code: 'NOT_FOUND' });
 
+    // Get or create Stripe customer
+    let customerId = user.stripe_customer_id;
     if (!customerId) {
-      const customer = await stripe.customers.create({ email: user.email, metadata: { userId } });
+      const customer = await stripe.customers.create({
+        email: user.email,
+        metadata: { userId },
+      });
       customerId = customer.id;
       await supabase.from('users').update({ stripe_customer_id: customerId }).eq('id', userId);
     }
 
-    // Create subscription with expanded invoice and payment intent
-    const subscription = await stripe.subscriptions.create({
+    // Create a SetupIntent to collect card details
+    const setupIntent = await stripe.setupIntents.create({
       customer: customerId,
-      items: [{ price: PRICE_ID }],
-      payment_behavior: 'default_incomplete',
-      payment_settings: {
-        save_default_payment_method: 'on_subscription',
-        payment_method_types: ['card'],
-      },
-      expand: ['latest_invoice.payment_intent'],
+      payment_method_types: ['card'],
+      usage: 'off_session',
     });
-
-    const invoice = subscription.latest_invoice;
-    const paymentIntent = invoice?.payment_intent;
-
-    if (!paymentIntent?.client_secret) {
-      // Subscription may already be active (e.g. trial)
-      if (subscription.status === 'trialing' || subscription.status === 'active') {
-        await supabase.from('users').update({
-          is_premium: true,
-          stripe_subscription_id: subscription.id,
-          premium_expires_at: new Date(subscription.current_period_end * 1000).toISOString(),
-        }).eq('id', userId);
-        return res.json({ subscriptionId: subscription.id, alreadyActive: true });
-      }
-      return res.status(500).json({ error: 'Could not create payment intent', code: 'STRIPE_ERROR' });
-    }
 
     res.json({
-      subscriptionId: subscription.id,
-      clientSecret: paymentIntent.client_secret,
+      customerId,
+      setupIntentClientSecret: setupIntent.client_secret,
+      setupIntentId: setupIntent.id,
     });
   } catch (err) {
+    console.error('Subscribe error:', err);
     res.status(500).json({ error: err.message, code: 'STRIPE_ERROR' });
   }
 });
 
-// Confirm premium status after payment
+// Step 2: After card is saved, create the subscription
 router.post('/confirm', authenticateToken, async (req, res) => {
   try {
-    const { subscriptionId } = req.body;
+    const { setupIntentId } = req.body;
     const userId = req.userId;
 
-    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-
-    if (subscription.status === 'active' || subscription.status === 'trialing') {
-      await supabase.from('users').update({
-        is_premium: true,
-        stripe_subscription_id: subscriptionId,
-        premium_expires_at: new Date(subscription.current_period_end * 1000).toISOString(),
-      }).eq('id', userId);
-
-      res.json({ premium: true, expiresAt: subscription.current_period_end });
-    } else {
-      res.json({ premium: false, status: subscription.status });
+    // Get the setup intent to find the payment method
+    const setupIntent = await stripe.setupIntents.retrieve(setupIntentId);
+    
+    if (setupIntent.status !== 'succeeded') {
+      return res.status(400).json({ error: 'Payment method not confirmed', code: 'PAYMENT_INCOMPLETE' });
     }
+
+    const paymentMethodId = setupIntent.payment_method;
+    const customerId = setupIntent.customer;
+
+    // Attach payment method as default
+    await stripe.customers.update(customerId, {
+      invoice_settings: { default_payment_method: paymentMethodId },
+    });
+
+    // Create the subscription
+    const subscription = await stripe.subscriptions.create({
+      customer: customerId,
+      items: [{ price: PRICE_ID }],
+      default_payment_method: paymentMethodId,
+    });
+
+    // Mark user as premium
+    await supabase.from('users').update({
+      is_premium: true,
+      stripe_subscription_id: subscription.id,
+      premium_expires_at: new Date(subscription.current_period_end * 1000).toISOString(),
+    }).eq('id', userId);
+
+    res.json({ premium: true, expiresAt: subscription.current_period_end });
   } catch (err) {
+    console.error('Confirm error:', err);
     res.status(500).json({ error: err.message, code: 'STRIPE_ERROR' });
   }
 });
