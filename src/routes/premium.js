@@ -28,18 +28,37 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       await supabase.from('users').update({ stripe_customer_id: customerId }).eq('id', userId);
     }
 
-    // Create subscription
+    // Create subscription with expanded invoice and payment intent
     const subscription = await stripe.subscriptions.create({
       customer: customerId,
       items: [{ price: PRICE_ID }],
       payment_behavior: 'default_incomplete',
-      payment_settings: { save_default_payment_method: 'on_subscription' },
+      payment_settings: {
+        save_default_payment_method: 'on_subscription',
+        payment_method_types: ['card'],
+      },
       expand: ['latest_invoice.payment_intent'],
     });
 
+    const invoice = subscription.latest_invoice;
+    const paymentIntent = invoice?.payment_intent;
+
+    if (!paymentIntent?.client_secret) {
+      // Subscription may already be active (e.g. trial)
+      if (subscription.status === 'trialing' || subscription.status === 'active') {
+        await supabase.from('users').update({
+          is_premium: true,
+          stripe_subscription_id: subscription.id,
+          premium_expires_at: new Date(subscription.current_period_end * 1000).toISOString(),
+        }).eq('id', userId);
+        return res.json({ subscriptionId: subscription.id, alreadyActive: true });
+      }
+      return res.status(500).json({ error: 'Could not create payment intent', code: 'STRIPE_ERROR' });
+    }
+
     res.json({
       subscriptionId: subscription.id,
-      clientSecret: subscription.latest_invoice.payment_intent.client_secret,
+      clientSecret: paymentIntent.client_secret,
     });
   } catch (err) {
     res.status(500).json({ error: err.message, code: 'STRIPE_ERROR' });
