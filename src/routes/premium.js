@@ -1,7 +1,7 @@
 const express = require('express');
 const Stripe = require('stripe');
 const { requireAuth: authenticateToken } = require('../middleware/auth');
-const { supabase } = require('../lib/supabase');
+const supabase = require('../lib/supabase');
 
 const router = express.Router();
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
